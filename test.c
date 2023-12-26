@@ -1,29 +1,45 @@
+#include <bits/time.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <time.h>
 
-int sh_cd(char **args);
-int sh_help(char **args);
-int sh_exit(char **args);
+int sh_cd(char ***args);
+int sh_help(char ***args);
+int sh_exit(char ***args);
+int sh_time(char ***args);
 
-char *builtin_strs[] = {"cd", "help", "exit"};
+char *builtin_strs[] = {"cd", "help", "exit", "time"};
 
-int (*builtin_func[])(char **) = {&sh_cd, &sh_help, &sh_exit};
+int (*builtin_func[])(char ***) = {&sh_cd, &sh_help, &sh_exit, &sh_time};
 
 int sh_num_builtins() { return sizeof(builtin_strs) / sizeof(char *); }
 
-int sh_cd(char **args) {
-  if (args[1] == NULL) {
+int sh_cd(char ***args) {
+  if (args[0][1] == NULL) {
     fprintf(stderr, "sh: expected argument to \"cd\"\n");
-} else {
-    if (chdir(args[1]) != 0) {
+  } else {
+    if (chdir(args[0][1]) != 0) {
       perror("sh");
-}
-}
+    }
+  }
   return 1;
+}
+
+int sh_help(char ***args) {
+  printf("Shell Help Page\n\n");
+  printf("Available commands: \n");
+  for (int i = 0; i < sh_num_builtins(); i++) {
+    printf("- %s\n", builtin_strs[i]);
+  }
+  return 1;
+}
+
+int sh_exit(char ***args) {
+  return 0;
 }
 
 char *read_line() {
@@ -167,7 +183,10 @@ void execute_command(char **args, int input_fd, int output_fd) {
   }
 }
 
-void execute_pipeline(char ***commands, int num_commands) {
+int execute_pipeline(char ***commands, int num_commands) {
+  if (commands[0][0][0] == '\0') {
+    return 1;
+  }
   int **pipes = malloc((num_commands - 1) * sizeof(int *));
 
   // Create pipes
@@ -175,7 +194,7 @@ void execute_pipeline(char ***commands, int num_commands) {
     pipes[i] = malloc(2 * sizeof(int));
     if (pipe(pipes[i]) == -1) {
       perror("pipe");
-      exit(EXIT_FAILURE);
+      return 0;
     }
   }
 
@@ -199,6 +218,45 @@ void execute_pipeline(char ***commands, int num_commands) {
     free(pipes[i]);
   }
   free(pipes);
+  return 1;
+}
+
+int sh_time(char ***args) {
+  // Advance past "time"
+  args[0]++;
+  // count commands
+  int i = 0;
+  for (; args[i]; i++) {
+    ;
+  }
+  // Get time
+  struct timespec start, end;
+  double elapsed_time;
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  int res = execute_pipeline(args, i);
+  clock_gettime(CLOCK_MONOTONIC, &end);
+
+  elapsed_time = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1e6;
+  printf("Time: %.3f milliseconds\n", elapsed_time);
+  args[0]--;
+  return res;
+}
+
+int sh_run(char ***commands, int num_commands) {
+  if (commands[0][0] == NULL) {
+    // no command given
+    return 1;
+  }
+
+  // Check builtins
+  for (int i = 0; i < sh_num_builtins(); i++) {
+    if (strcmp(commands[0][0], builtin_strs[i]) == 0) {
+      return (*builtin_func[i])(commands);
+    }
+  }
+
+  return execute_pipeline(commands, num_commands);
 }
 
 int main() {
@@ -210,19 +268,14 @@ int main() {
     printf("%s\e[1;31m/%s \e[0m\e[1m=>\e[0m ", cwd, last_slash);
     int status = 0;
     char *test = read_line();
-    if (strlen(test) == 1) {
-      free(test);
-      continue;
-    } else if (strncmp(test, "exit", 4) == 0) {
-      free(test);
-      return 0;
-    }
     char **commands = split_pipes(test);
     char ***args = split_args(commands, &status);
     if (status == -1) {
       fprintf(stderr, "Expected end of quoted string\n");
     }
-    execute_pipeline(args, status);
+    if (sh_run(args, status) == 0) {
+      exit(1);
+    }
 
     for (int i = 0; args[i]; i++) {
       free(args[i]);
